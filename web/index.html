@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FoodSnap</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🍽️ FoodSnap 📸</h1>
+            <p class="subtitle">Snap, Analyze, Cook!</p>
+            <div class="usage-info">
+                <span class="badge">Upload Image</span>
+                <span class="arrow">→</span>
+                <span class="badge">AI Analysis</span>
+                <span class="arrow">→</span>
+                <span class="badge">Get Recipe !!!</span>
+            </div>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <svg class="upload-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <p class="upload-text">Drop your food image here or click to browse</p>
+                    <p class="upload-hint">Supports JPG, PNG, WebP (max 10MB)</p>
+                    <input type="file" id="fileInput" accept="image/*" hidden>
+                </div>
+                
+                <div id="imagePreview" class="image-preview hidden">
+                    <img id="previewImg" src="" alt="Preview">
+                    <button id="removeImage" class="remove-btn">×</button>
+                </div>
+            </div>
+
+            <button id="analyzeBtn" class="analyze-btn" disabled>
+                <span class="btn-text">Analyze Food</span>
+                <span class="btn-loader hidden"></span>
+            </button>
+
+            <div id="statusMessage" class="status-message hidden"></div>
+
+            <div id="results" class="results-section hidden">
+                <div class="results-header">
+                    <h2>Analysis Results</h2>
+                    <div class="result-meta">
+                        <span id="confidence" class="confidence-badge"></span>
+                        <span id="cached" class="cache-badge hidden">Cached</span>
+                        <span id="timing" class="timing-badge"></span>
+                    </div>
+                </div>
+
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="overview">Overview</button>
+                    <button class="tab-btn" data-tab="ingredients">Ingredients</button>
+                    <button class="tab-btn" data-tab="instructions">Instructions</button>
+                    <button class="tab-btn" data-tab="nutrition">Nutrition</button>
+                </div>
+
+                <div class="tab-content">
+                    <div id="overview" class="tab-panel active">
+                        <div class="dish-info">
+                            <h3 id="dishName"></h3>
+                            <p id="description"></p>
+                            <div class="dish-meta">
+                                <span id="cuisine" class="meta-badge"></span>
+                                <span id="difficulty" class="meta-badge"></span>
+                                <span id="servings" class="meta-badge"></span>
+                            </div>
+                            <div id="tags" class="tags-container"></div>
+                        </div>
+                        <!-- Caption section removed for production -->
+                        <!-- <div class="caption-section">
+                            <h4>Generated Caption</h4>
+                            <p id="caption" class="caption-text"></p>
+                        </div> -->
+                    </div>
+
+                    <div id="ingredients" class="tab-panel">
+                        <h3>Ingredients List</h3>
+                        <ul id="ingredientsList" class="ingredients-list"></ul>
+                    </div>
+
+                    <div id="instructions" class="tab-panel">
+                        <div class="recipe-header">
+                            <div class="time-info">
+                                <span id="prepTime"></span>
+                                <span id="cookTime"></span>
+                            </div>
+                        </div>
+                        <h3>Instructions</h3>
+                        <ol id="instructions" class="instructions-list"></ol>
+                    </div>
+
+                    <div id="nutrition" class="tab-panel">
+                        <h3>Nutritional Information</h3>
+                        <div id="nutritionGrid" class="nutrition-grid"></div>
+                        <div class="allergens-section">
+                            <h4>Allergens</h4>
+                            <div id="allergens" class="allergens-list"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="error" class="error-section hidden">
+                <h3>Error</h3>
+                <p id="errorMessage"></p>
+            </div>
+        </main>
+
+        <footer>
+            <p class="footer-text">Oliver Murcko - 2025</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="error-handler.js"></script>
+    <script src="demo.js"></script>
+</body>
+</html>
