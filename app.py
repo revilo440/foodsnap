@@ -18,21 +18,29 @@ secrets = [modal.Secret.from_name("huggingface-secret")]
 cache_volume = modal.Volume.from_name("foodsnap-cache", create_if_missing=True)
 CACHE_DIR = "/cache"
 
-# Modal Image with all dependencies
+# Modal Image with vLLM-compatible dependencies
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "torch==2.1.2",
-        "torchvision==0.16.2",
-        "transformers==4.44.2",
-        "accelerate==0.25.0",
-        "pillow==10.1.0",
-        "fastapi==0.104.1",
-        "pydantic==2.5.2",
-        "python-multipart==0.0.6",
-        "numpy<2.0",
-        "sentencepiece==0.1.99",
-        "protobuf==4.25.1",
+        "torch>=2.2.0",
+        "torchvision>=0.17.0", 
+        "transformers>=4.53.2",  # vLLM compatible version
+        "accelerate>=0.25.0",
+        
+        "vllm>=0.10.0",
+        
+        "fastapi>=0.115.0",
+        "pydantic>=2.5.2",
+        "python-multipart>=0.0.6",
+        
+        "numpy>=2.0",
+        "pillow>=10.1.0",
+        "sentencepiece>=0.1.99",
+        "protobuf>=4.25.1",
+    )
+    .run_commands(
+        "pip cache purge",
+        "python -c \"from transformers import BlipProcessor, BlipForConditionalGeneration; BlipProcessor.from_pretrained('Salesforce/blip-image-captioning-base'); BlipForConditionalGeneration.from_pretrained('Salesforce/blip-image-captioning-base')\"",
     )
 )
 
@@ -45,7 +53,7 @@ GPU_CONFIG = "A100"
     secrets=secrets,
     volumes={CACHE_DIR: cache_volume},
     scaledown_window=300,
-    timeout=600,
+    timeout=900,
     min_containers=1,
 )
 class FoodSnapPipeline:
@@ -56,15 +64,18 @@ class FoodSnapPipeline:
     blip_processor = None
     llm = None
     llm_tokenizer = None
-    cache = None
+    sampling_params = None
+    model_name = "meta-llama/Llama-3.2-3B-Instruct"
+    cache: Optional[OrderedDict] = None
     cache_stats = {"hits": 0, "misses": 0}
         
     @modal.enter()
     def setup(self):
-        """Load models on container startup."""
+        """Load models with vLLM integration."""
+        from vllm import LLM, SamplingParams
         import torch
         from transformers import BlipProcessor, BlipForConditionalGeneration
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        import os
         
         print("Loading BLIP model...")
         self.blip_processor = BlipProcessor.from_pretrained(
@@ -78,49 +89,76 @@ class FoodSnapPipeline:
         print("Successfully loaded BLIP model")
         self.vision_model_name = "blip-base"
         
-        print("Loading optimized LLM model...")
+        print("Loading vLLM Llama model...")
         model_name = "meta-llama/Llama-3.2-3B-Instruct"
         
-        # Load Llama 3.2 with optimizations for speed
-        import os
         try:
-            self.llm_tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                token=os.environ.get("HF_TOKEN")
-            )
-            self.llm = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.float16,
-                device_map="auto",
-                load_in_8bit=False,
-                token=os.environ.get("HF_TOKEN"),
-                trust_remote_code=True
+            # Load Llama with vLLM for fast inference
+            self.llm = LLM(
+                model=model_name,
+                tensor_parallel_size=1,
+                gpu_memory_utilization=0.7,
+                trust_remote_code=True,
+                dtype="float16",
+                max_model_len=2048,
+                enforce_eager=True,
+                download_dir="/tmp/vllm_cache"
             )
             
-            if self.llm_tokenizer.pad_token is None:
-                self.llm_tokenizer.pad_token = self.llm_tokenizer.eos_token
-                
-            print(f"Successfully loaded {model_name} with float16 optimization")
-            print(f"Model device: {self.llm.device}")
-            print(f"Model dtype: {self.llm.dtype}")
-            self.model_name = "llama-3.2-3b-instruct"
+            self.sampling_params = SamplingParams(
+                temperature=0.6,
+                max_tokens=1200,
+                repetition_penalty=1.15,
+                top_p=0.9
+            )
+            
+            print(f"Successfully loaded {model_name} with vLLM")
+            print(f"GPU memory utilization: 70%")
+            self.model_name = "llama-3.2-3b-instruct-vllm"
             
         except Exception as e:
-            print(f"Failed to load Llama 3.2: {e}")
-            print("Falling back to Flan-T5-large...")
+            print(f"Failed to load vLLM Llama: {e}")
+            print("Falling back to transformers implementation...")
             
-            # Fallback to Flan-T5
-            from transformers import T5Tokenizer, T5ForConditionalGeneration
-            fallback_model = "google/flan-t5-large"
+            # Fallback to transformers if vLLM fails
+            from transformers import AutoTokenizer, AutoModelForCausalLM
             
-            self.llm_tokenizer = T5Tokenizer.from_pretrained(fallback_model)
-            self.llm = T5ForConditionalGeneration.from_pretrained(
-                fallback_model,
-                torch_dtype=torch.float16,
-                device_map="auto"
-            )
-            print(f"Successfully loaded fallback model: {fallback_model}")
-            self.model_name = "flan-t5-large"
+            try:
+                self.llm_tokenizer = AutoTokenizer.from_pretrained(
+                    model_name,
+                    token=os.environ.get("HF_TOKEN")
+                )
+                self.llm = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float16,
+                    device_map="auto",
+                    load_in_8bit=False,
+                    token=os.environ.get("HF_TOKEN"),
+                    trust_remote_code=True
+                )
+                
+                if self.llm_tokenizer.pad_token is None:
+                    self.llm_tokenizer.pad_token = self.llm_tokenizer.eos_token
+                    
+                print(f"Successfully loaded {model_name} with transformers fallback")
+                self.model_name = "llama-3.2-3b-instruct-transformers"
+                
+            except Exception as fallback_e:
+                print(f"Transformers fallback also failed: {fallback_e}")
+                print("Loading Flan-T5 as final fallback...")
+                
+                # Final fallback to Flan-T5
+                from transformers import T5Tokenizer, T5ForConditionalGeneration
+                fallback_model = "google/flan-t5-large"
+                
+                self.llm_tokenizer = T5Tokenizer.from_pretrained(fallback_model)
+                self.llm = T5ForConditionalGeneration.from_pretrained(
+                    fallback_model,
+                    torch_dtype=torch.float16,
+                    device_map="auto"
+                )
+                print(f"Successfully loaded fallback model: {fallback_model}")
+                self.model_name = "flan-t5-large"
         
         print("Loading cache...")
         self._load_cache()
@@ -146,6 +184,9 @@ class FoodSnapPipeline:
         """Save cache to Modal Volume."""
         cache_file = Path(CACHE_DIR) / "foodsnap_cache.json"
         try:
+            if self.cache is None:
+                self.cache = OrderedDict()
+            
             # Limit cache size to 100 entries (LRU)
             if len(self.cache) > 100:
                 # Remove oldest entries
@@ -224,15 +265,12 @@ class FoodSnapPipeline:
         import torch
         import re
         
-        # Debug: Log which model path we're taking
-        print(f"Using model: {self.model_name}")
-        
         # Check which model we're using and adapt accordingly
         if self.model_name == "flan-t5-large":
-            print("Taking Flan-T5 path")
             return self._extract_with_flan_t5(caption)
+        elif "vllm" in self.model_name:
+            return self._extract_with_vllm(caption)
         else:
-            print("Taking Llama optimized path")
             return self._extract_with_llama_optimized(caption)
     
     def _extract_with_flan_t5(self, caption: str) -> Dict:
@@ -376,6 +414,86 @@ Return ONLY valid JSON:"""
         
         return self._parse_llm_response(response, caption)
     
+    def _extract_with_vllm(self, caption: str) -> Dict:
+        """Extract food info using vLLM for fast inference."""
+        
+        system_prompt = """You are a professional food analysis expert. Analyze food images and provide detailed, accurate information in JSON format. Be specific and realistic with all details."""
+        
+        user_prompt = f"""Based on this food description: "{caption}"
+
+Generate a detailed analysis of THIS SPECIFIC DISH in valid JSON format:
+
+{{
+  "dish_name": "<actual name of the dish you identified from the description>",
+  "cuisine": "<appropriate cuisine type based on the dish>",
+  "confidence": <confidence score between 0.1-1.0>,
+  "description": "<comprehensive 2-3 sentence description of THIS dish, including appearance, textures, and preparation style>",
+  "ingredients": [
+    {{"name": "<ingredient name>", "amount": "<quantity>", "unit": "<measurement unit>", "optional": <true/false>}}
+  ],
+  "recipe": {{
+    "prep_time": "<time in minutes> minutes",
+    "cook_time": "<time in minutes> minutes", 
+    "servings": <number of servings>,
+    "difficulty": "<easy/medium/hard>",
+    "instructions": [
+      "<detailed step 1 with specific temperatures, times, and techniques>",
+      "<detailed step 2 with specific actions and measurements>",
+      "<detailed step 3 explaining exactly what to do>",
+      "<detailed step 4 with clear instructions>",
+      "<detailed step 5 describing the process>",
+      "<additional steps as needed for completeness>"
+    ]
+  }},
+  "nutrition": {{
+    "calories": <estimated calories per serving>,
+    "protein": "<grams>g",
+    "carbs": "<grams>g",
+    "fat": "<grams>g",
+    "fiber": "<grams>g",
+    "sugar": "<grams>g",
+    "sodium": "<milligrams>mg"
+  }},
+  "allergens": ["<relevant allergens for this specific dish>"],
+  "tags": ["<relevant descriptive tags>"]
+}}
+
+CRITICAL REQUIREMENTS:
+1. Base ALL information on the food described in: "{caption}"
+2. DO NOT copy example dishes - identify what THIS food actually is
+3. Provide 5-8 detailed, complete recipe instructions
+4. Calculate realistic nutrition for THIS specific dish
+5. Every step must be a complete, actionable instruction
+6. All values must be specific, not placeholders
+
+Return ONLY valid JSON:"""
+        
+        # Format for vLLM chat template
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        try:
+            # Get tokenizer from vLLM engine for chat template
+            tokenizer = self.llm.get_tokenizer()
+            formatted_prompt = tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=True
+            )
+            
+            # Generate with vLLM (much faster than transformers)
+            outputs = self.llm.generate([formatted_prompt], self.sampling_params)
+            response = outputs[0].outputs[0].text
+            
+            return self._parse_llm_response(response, caption)
+            
+        except Exception as e:
+            print(f"vLLM generation failed: {e}")
+            # Fallback to basic response
+            return self._get_fallback_response(caption)
+    
     def _extract_with_llama(self, caption: str) -> Dict:
         """Extract food info using Llama model (legacy method)."""
         import torch
@@ -460,9 +578,6 @@ Return ONLY valid JSON:"""
             outputs[0][inputs.input_ids.shape[1]:],
             skip_special_tokens=True
         )
-        
-        # Log raw response for debugging
-        print(f"\n=== LLAMA RESPONSE ===\n{response[:500]}...\n=== END ===\n")
         
         return self._parse_llm_response(response, caption)
     
@@ -879,6 +994,16 @@ def fastapi_app():
                 status_code=500
             )
     
+    @app.get("/cache/stats")
+    def get_cache_stats():
+        """Get cache statistics."""
+        return cache_stats.remote()
+    
+    @app.delete("/cache/clear")
+    def clear_cache():
+        """Clear all cache entries."""
+        return cache_clear.remote()
+    
     return app
 
 
@@ -904,15 +1029,15 @@ def cache_stats():
     return JSONResponse(content={"entries": 0, "hits": 0, "misses": 0})
 
 @app.function(image=image, volumes={CACHE_DIR: cache_volume})
-@modal.fastapi_endpoint(method="POST")
-def cache_cleanup():
-    """Clear the cache."""
+@modal.fastapi_endpoint(method="DELETE")
+def cache_clear():
+    """Clear all cache entries."""
     from fastapi.responses import JSONResponse
     
     try:
         cache_file = Path(CACHE_DIR) / "foodsnap_cache.json"
         if cache_file.exists():
             cache_file.unlink()
-        return JSONResponse(content={"status": "Cache cleared successfully"})
+        return JSONResponse(content={"message": "Cache cleared successfully", "entries_removed": 0})
     except Exception as e:
         return JSONResponse(content={"error": str(e)})
