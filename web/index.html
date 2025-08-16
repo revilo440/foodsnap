@@ -61,6 +61,13 @@
                     <button class="tab-btn" data-tab="ingredients">Ingredients</button>
                     <button class="tab-btn" data-tab="instructions">Instructions</button>
                     <button class="tab-btn" data-tab="nutrition">Nutrition</button>
+                    <button class="tab-btn" data-tab="history">History</button>
+                </div></div>
+
+                <div class="cache-controls">
+                    <button id="cacheStatsBtn" class="cache-btn">📊 Cache Stats</button>
+                    <button id="cacheClearBtn" class="cache-btn danger">🗑️ Clear Cache</button>
+                    <div id="cacheInfo" class="cache-info hidden"></div>
                 </div>
 
                 <div class="tab-content">
@@ -104,6 +111,16 @@
                         <div class="allergens-section">
                             <h4>Allergens</h4>
                             <div id="allergens" class="allergens-list"></div>
+                        </div>
+                    </div>
+
+                    <div id="history" class="tab-panel">
+                        <div class="history-header">
+                            <h3>Analysis History</h3>
+                            <button id="clearHistoryBtn" class="clear-history-btn">🗑️ Clear History</button>
+                        </div>
+                        <div id="historyList" class="history-list">
+                            <p class="no-history">No analysis history yet. Upload and analyze some food images to see them here!</p>
                         </div>
                     </div>
                 </div>

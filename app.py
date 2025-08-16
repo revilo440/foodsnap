@@ -56,7 +56,8 @@ class FoodSnapPipeline:
     blip_processor = None
     llm = None
     llm_tokenizer = None
-    cache = None
+    model_name = "meta-llama/Llama-3.2-3B-Instruct"
+    cache: Optional[OrderedDict] = None
     cache_stats = {"hits": 0, "misses": 0}
         
     @modal.enter()
@@ -146,6 +147,9 @@ class FoodSnapPipeline:
         """Save cache to Modal Volume."""
         cache_file = Path(CACHE_DIR) / "foodsnap_cache.json"
         try:
+            if self.cache is None:
+                self.cache = OrderedDict()
+            
             # Limit cache size to 100 entries (LRU)
             if len(self.cache) > 100:
                 # Remove oldest entries
@@ -224,15 +228,10 @@ class FoodSnapPipeline:
         import torch
         import re
         
-        # Debug: Log which model path we're taking
-        print(f"Using model: {self.model_name}")
-        
         # Check which model we're using and adapt accordingly
         if self.model_name == "flan-t5-large":
-            print("Taking Flan-T5 path")
             return self._extract_with_flan_t5(caption)
         else:
-            print("Taking Llama optimized path")
             return self._extract_with_llama_optimized(caption)
     
     def _extract_with_flan_t5(self, caption: str) -> Dict:
@@ -460,9 +459,6 @@ Return ONLY valid JSON:"""
             outputs[0][inputs.input_ids.shape[1]:],
             skip_special_tokens=True
         )
-        
-        # Log raw response for debugging
-        print(f"\n=== LLAMA RESPONSE ===\n{response[:500]}...\n=== END ===\n")
         
         return self._parse_llm_response(response, caption)
     
@@ -879,6 +875,16 @@ def fastapi_app():
                 status_code=500
             )
     
+    @app.get("/cache/stats")
+    def get_cache_stats():
+        """Get cache statistics."""
+        return cache_stats.remote()
+    
+    @app.delete("/cache/clear")
+    def clear_cache():
+        """Clear all cache entries."""
+        return cache_clear.remote()
+    
     return app
 
 
@@ -904,15 +910,15 @@ def cache_stats():
     return JSONResponse(content={"entries": 0, "hits": 0, "misses": 0})
 
 @app.function(image=image, volumes={CACHE_DIR: cache_volume})
-@modal.fastapi_endpoint(method="POST")
-def cache_cleanup():
-    """Clear the cache."""
+@modal.fastapi_endpoint(method="DELETE")
+def cache_clear():
+    """Clear all cache entries."""
     from fastapi.responses import JSONResponse
     
     try:
         cache_file = Path(CACHE_DIR) / "foodsnap_cache.json"
         if cache_file.exists():
             cache_file.unlink()
-        return JSONResponse(content={"status": "Cache cleared successfully"})
+        return JSONResponse(content={"message": "Cache cleared successfully", "entries_removed": 0})
     except Exception as e:
         return JSONResponse(content={"error": str(e)})

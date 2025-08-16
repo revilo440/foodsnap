@@ -1,6 +1,9 @@
-// Live Modal endpoint - using ASGI app pattern like Step 3
-// Replace with your actual Modal endpoint after deployment
-const API_ENDPOINT = 'https://YOUR_USERNAME--foodsnap-fastapi-app.modal.run/analyze';
+const API_ENDPOINT = (() => {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        return 'http://localhost:8000/analyze';
+    }
+    return 'https://YOUR_USERNAME--foodsnap-fastapi-app.modal.run/analyze';
+})();
 
 // Initialize error handler and loading manager
 let errorHandler = null;
@@ -27,9 +30,114 @@ const errorMessage = document.getElementById('errorMessage');
 
 // Cache elements
 const cacheStatsBtn = document.getElementById('cacheStatsBtn');
+const cacheClearBtn = document.getElementById('cacheClearBtn');
 const cacheInfo = document.getElementById('cacheInfo');
 
+const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+const historyList = document.getElementById('historyList');
+
 let selectedFile = null;
+
+function saveToHistory(data, imageFile) {
+    const history = JSON.parse(localStorage.getItem('foodsnap_history') || '[]');
+    const historyItem = {
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        dish_name: data.dish_name || 'Unknown Dish',
+        cuisine: data.cuisine || 'Unknown',
+        confidence: data.confidence || 0,
+        data: data,
+        image_name: imageFile.name
+    };
+    
+    history.unshift(historyItem);
+    
+    if (history.length > 50) {
+        history.splice(50);
+    }
+    
+    localStorage.setItem('foodsnap_history', JSON.stringify(history));
+    updateHistoryDisplay();
+}
+
+function updateHistoryDisplay() {
+    const history = JSON.parse(localStorage.getItem('foodsnap_history') || '[]');
+    
+    if (history.length === 0) {
+        historyList.innerHTML = '<p class="no-history">No analysis history yet. Upload and analyze some food images to see them here!</p>';
+        return;
+    }
+    
+    historyList.innerHTML = history.map(item => `
+        <div class="history-item" onclick="loadHistoryItem(${item.id})">
+            <div class="history-item-header">
+                <h4>${item.dish_name}</h4>
+                <span class="history-date">${new Date(item.timestamp).toLocaleDateString()}</span>
+            </div>
+            <div class="history-item-meta">
+                <span class="history-cuisine">${item.cuisine}</span>
+                <span class="history-confidence">${Math.round(item.confidence * 100)}% confidence</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function loadHistoryItem(id) {
+    const history = JSON.parse(localStorage.getItem('foodsnap_history') || '[]');
+    const item = history.find(h => h.id === id);
+    
+    if (item) {
+        displayResults(item.data);
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelector('[data-tab="overview"]').classList.add('active');
+        document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
+        document.getElementById('overview').classList.add('active');
+    }
+}
+
+function clearHistory() {
+    if (confirm('Are you sure you want to clear all analysis history?')) {
+        localStorage.removeItem('foodsnap_history');
+        updateHistoryDisplay();
+    }
+}
+
+function compressImage(file, maxWidth = 1024, quality = 0.8) {
+    return new Promise((resolve, reject) => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+        
+        img.onload = () => {
+            let { width, height } = img;
+            
+            if (width > maxWidth) {
+                height = (height * maxWidth) / width;
+                width = maxWidth;
+            }
+            
+            canvas.width = width;
+            canvas.height = height;
+            
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    const compressedFile = new File([blob], file.name, {
+                        type: 'image/jpeg',
+                        lastModified: Date.now()
+                    });
+                    resolve(compressedFile);
+                } else {
+                    reject(new Error('Canvas to Blob conversion failed'));
+                }
+            }, 'image/jpeg', quality);
+        };
+        
+        img.onerror = () => reject(new Error('Image load failed'));
+        img.src = URL.createObjectURL(file);
+    });
+}
 
 // File upload handlers
 uploadArea.addEventListener('click', () => fileInput.click());
@@ -80,19 +188,35 @@ function handleFileSelect(file) {
         return;
     }
     
-    selectedFile = file;
-    
-    // Show preview
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        previewImg.src = e.target.result;
-        uploadArea.classList.add('hidden');
-        imagePreview.classList.remove('hidden');
-        analyzeBtn.disabled = false;
-    };
-    reader.readAsDataURL(file);
-    
-    hideResults();
+    compressImage(file).then(compressedFile => {
+        selectedFile = compressedFile;
+        
+        // Show preview
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            previewImg.src = e.target.result;
+            uploadArea.classList.add('hidden');
+            imagePreview.classList.remove('hidden');
+            analyzeBtn.disabled = false;
+        };
+        reader.readAsDataURL(compressedFile);
+        
+        hideResults();
+    }).catch(err => {
+        console.error('Image compression failed:', err);
+        selectedFile = file;
+        
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            previewImg.src = e.target.result;
+            uploadArea.classList.add('hidden');
+            imagePreview.classList.remove('hidden');
+            analyzeBtn.disabled = false;
+        };
+        reader.readAsDataURL(file);
+        
+        hideResults();
+    });
 }
 
 // Analysis
@@ -142,6 +266,7 @@ analyzeBtn.addEventListener('click', async function analyzeImage() {
             }
             
             displayResults(data);
+            saveToHistory(data, selectedFile);
             showStatus('Analysis complete!', 'success');
         }
     } catch (err) {
@@ -396,4 +521,33 @@ cacheStatsBtn.addEventListener('click', async () => {
     } catch (err) {
         console.error('Failed to fetch cache stats:', err);
     }
+});
+
+cacheClearBtn.addEventListener('click', async () => {
+    if (confirm('Are you sure you want to clear the server cache? This will remove all cached analysis results.')) {
+        try {
+            const response = await fetch(API_ENDPOINT.replace('/analyze', '/cache/clear'), {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+            
+            showStatus('Cache cleared successfully!', 'success');
+            cacheInfo.innerHTML = 'Cache cleared - all entries removed';
+            cacheInfo.classList.remove('hidden');
+            
+            setTimeout(() => {
+                cacheInfo.classList.add('hidden');
+            }, 3000);
+        } catch (err) {
+            console.error('Failed to clear cache:', err);
+            showStatus('Failed to clear cache', 'error');
+        }
+    }
+});
+
+clearHistoryBtn.addEventListener('click', clearHistory);
+
+// Initialize history display on page load
+document.addEventListener('DOMContentLoaded', () => {
+    updateHistoryDisplay();
 });
