@@ -1,0 +1,22 @@
+# Core dependencies
+modal==0.64.0
+fastapi==0.104.1
+python-multipart==0.0.6
+pydantic==2.5.2
+
+# ML/AI dependencies
+torch==2.1.2
+torchvision==0.16.2
+transformers==4.44.2
+accelerate==0.25.0
+sentencepiece==0.1.99
+protobuf==4.25.1
+
+# Image processing
+pillow==10.1.0
+
+# Utilities
+numpy<2.0
+
+# Development (optional)
+uvicorn==0.24.0
