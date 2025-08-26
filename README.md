@@ -47,7 +47,7 @@ FoodSnap leverages state-of-the-art vision and language models to provide compre
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/foodsnap.git
+   git clone https://github.com/revilo440/foodsnap.git
    cd foodsnap
    ```
 
